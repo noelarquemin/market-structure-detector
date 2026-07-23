@@ -9,9 +9,10 @@ from typing import Iterable, Optional
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import plotly.graph_objects as go
 
 from hierarchical_extremes import HierarchicalExtremes
-from market_structure import extremes_to_dataframe
+from market_structure import extremes_to_dataframe, classify_extremes
 
 LEVEL_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
 
@@ -68,4 +69,94 @@ def plot_market_structure(
     ax.legend(loc="upper left")
     fig.autofmt_xdate()
     fig.tight_layout()
+    return fig
+
+
+def plot_market_structure_interactive(
+    df: pd.DataFrame,
+    he: HierarchicalExtremes,
+    levels_to_plot: Optional[Iterable[int]] = None,
+    label_level: Optional[int] = None,
+    title: str = "Structure de marché",
+    height: int = 700,
+) -> go.Figure:
+    """
+    Graphique interactif (Plotly) : chandeliers OHLC + zigzags de structure
+    par niveau, avec zoom molette, glisser (pan) et range slider en bas du
+    graphique pour naviguer dans le temps. Les extrêmes du niveau
+    `label_level` sont annotés HH / LH / HL / LL.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Données OHLC (colonnes 'open', 'high', 'low', 'close').
+    he : HierarchicalExtremes
+        Résultat de `compute_market_structure`.
+    levels_to_plot : Iterable[int], optionnel
+        Niveaux à superposer (par défaut : tous les niveaux disponibles).
+    label_level : int, optionnel
+        Niveau dont les points reçoivent les étiquettes HH/LH/HL/LL
+        (par défaut : le niveau le plus élevé parmi `levels_to_plot`,
+        c'est-à-dire la structure la plus "macro").
+    title : str
+        Titre du graphique.
+    height : int
+        Hauteur du graphique en pixels.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    if levels_to_plot is None:
+        levels_to_plot = list(range(he._levels))
+    else:
+        levels_to_plot = list(levels_to_plot)
+
+    if label_level is None and levels_to_plot:
+        label_level = max(levels_to_plot)
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df["open"], high=df["high"], low=df["low"], close=df["close"],
+        name="Prix",
+        increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
+    ))
+
+    for lvl in levels_to_plot:
+        ext_df = extremes_to_dataframe(he, lvl)
+        if ext_df.empty:
+            continue
+        ext_df = classify_extremes(ext_df)
+        color = LEVEL_COLORS[lvl % len(LEVEL_COLORS)]
+        show_labels = (lvl == label_level)
+
+        textposition = [
+            "top center" if t == 1 else "bottom center"
+            for t in ext_df["ext_type"]
+        ]
+
+        fig.add_trace(go.Scatter(
+            x=ext_df["timestamp"], y=ext_df["price"],
+            mode="lines+markers+text" if show_labels else "lines+markers",
+            text=ext_df["label"] if show_labels else None,
+            textposition=textposition if show_labels else None,
+            textfont=dict(size=11, color=color),
+            line=dict(color=color, width=1.5),
+            marker=dict(size=5, color=color),
+            name=f"Niveau {lvl} ({len(ext_df)} extrêmes)",
+        ))
+
+    fig.update_layout(
+        title=title,
+        height=height,
+        xaxis_rangeslider_visible=True,
+        dragmode="pan",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(l=10, r=10, t=60, b=10),
+    )
+    fig.update_yaxes(title_text="Prix", fixedrange=False)
+    fig.update_xaxes(title_text="Date")
+
     return fig
